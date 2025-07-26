@@ -82,4 +82,4 @@ tidydesk/
 
 ## 📜 License
 
-MIT License © 2025 Jeremy Stevensa
+MIT License © 2025 Jeremy Stevens
