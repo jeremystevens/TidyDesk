@@ -1,0 +1,95 @@
+{
+    "ALLOWED_EXTENSIONS": {
+        "Documents": [
+            ".txt",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".odt",
+            ".csv",
+            ".md",
+            ".rtf"
+        ],
+        "Images": [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".bmp",
+            ".webp",
+            ".tiff",
+            ".ico",
+            ".heic",
+            ".svg",
+            ".raw"
+        ],
+        "Videos": [
+            ".mp4",
+            ".mkv",
+            ".mov",
+            ".avi",
+            ".flv",
+            ".wmv",
+            ".webm",
+            ".3gp"
+        ],
+        "Audio": [
+            ".mp3",
+            ".wav",
+            ".aac",
+            ".ogg",
+            ".flac",
+            ".m4a",
+            ".aiff",
+            ".wma"
+        ],
+        "Code": [
+            ".py",
+            ".js",
+            ".ts",
+            ".html",
+            ".css",
+            ".php",
+            ".c",
+            ".cpp",
+            ".cs",
+            ".java",
+            ".json",
+            ".xml",
+            ".yml",
+            ".yaml",
+            ".sh",
+            ".bat",
+            ".rb",
+            ".go",
+            ".sql",
+            ".ini",
+            ".env",
+            ".toml"
+        ],
+        "Archives": [
+            ".zip",
+            ".rar",
+            ".7z",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".xz"
+        ],
+        "Design": [
+            ".psd",
+            ".ai",
+            ".xd",
+            ".sketch",
+            ".fig",
+            ".blend",
+            ".obj",
+            ".fbx",
+            ".stl"
+        ]
+    }
+}

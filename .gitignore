@@ -1,0 +1,14 @@
+# Environment
+.env
+__pycache__/
+*.py[cod]
+venv/
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Project-Specific
+file_index.db
+undo_log.json
+openai_log.json
