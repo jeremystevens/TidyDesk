@@ -11,12 +11,14 @@ import ttkbootstrap as ttk
 from ttkbootstrap.scrolled import ScrolledText
 from ttkbootstrap.widgets import Meter
 from ttkbootstrap.constants import INFO, SUCCESS, PRIMARY, WARNING, SECONDARY, DANGER, LIGHT
-
 from src.organizer import start_processing_threaded, regroup_by_tags, undo_last_cleanup_threaded, DB_PATH
 from src.db import update_tags_in_db
 from src.ai_tagger import get_batched_ai_tags, BATCH_SIZE, SKIP_TAGS
 from src.ai_tagger import set_ai_enabled
+from src.search_window import open_search_window
+from src.index_files import start_indexing_threaded, get_index_statistics, clear_index
 
+version = "1.0.2"
 # Enhanced History Management
 HISTORY_LOG_PATH = Path("history_log.json")
 
@@ -317,10 +319,10 @@ def open_undo_history_window(log_area, meter):
         command=win.destroy
     ).pack(side=RIGHT, padx=5)
 
-def open_search_window():
-    win = Toplevel()
-    win.title("Search Files")
-    win.geometry("700x500")
+# def open_search_window():
+#     win = Toplevel()
+#     win.title("Search Files")
+#     win.geometry("700x500")
 
 def export_to_csv():
     dest = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV Files", "*.csv")])
@@ -402,8 +404,8 @@ def retag_missing_entries(log_callback, meter):
 
 def build_gui():
     from tkinter import END
-    app = ttk.Window(themename="superhero", title="Desktop File Organizer v2.0", size=(1200, 690))
-    
+    app = ttk.Window(themename="superhero", title="Tidy Desk V" + version, size=(1200, 700))
+
     # Main header - more compact
     header_frame = ttk.Frame(app)
     header_frame.pack(fill=X, pady=(10, 5))
@@ -430,7 +432,7 @@ def build_gui():
         primary_grid, 
         text="🚀 Start Organizing", 
         bootstyle=SUCCESS,
-        width=16,
+        width=17,
         command=lambda: start_processing_threaded(log_area, meter)
     ).grid(row=0, column=0, padx=3, pady=2)
 
@@ -447,12 +449,12 @@ def build_gui():
 
     ttk.Button(
         primary_grid, 
-        text="🏷️ Group by Tags", 
+        text="🏷️Group by Tags", 
         bootstyle=PRIMARY,
-        width=16,
+        width=17,
         command=regroup_by_tags
     ).grid(row=1, column=0, padx=3, pady=2)
-
+    
     # Undo section - compact
     undo_frame = ttk.LabelFrame(left_frame, text="↩️ Undo", padding=10)
     undo_frame.pack(fill=X, pady=5)
