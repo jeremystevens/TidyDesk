@@ -518,15 +518,113 @@ def create_compact_settings_tab(parent):
     api_frame = ttk.Frame(env_frame)
     api_frame.pack(fill=X, pady=2)
     ttk.Label(api_frame, text="API Key:", width=10).pack(side=LEFT)
-    ttk.Entry(api_frame, show="*", width=20).pack(side=LEFT, padx=2)
+    api_key_var = ttk.StringVar()
+    api_entry = ttk.Entry(api_frame, show="*", width=20, textvariable=api_key_var)
+    api_entry.pack(side=LEFT, padx=2)
 
-    # DB Path
+    # DB Path (Read-only)
     db_frame = ttk.Frame(env_frame)
     db_frame.pack(fill=X, pady=2)
     ttk.Label(db_frame, text="DB Path:", width=10).pack(side=LEFT)
-    db_entry = ttk.Entry(db_frame, width=20)
+    db_entry = ttk.Entry(db_frame, width=20, state="readonly")
     db_entry.pack(side=LEFT, padx=2)
+    # Insert the value before making it readonly
+    db_entry.config(state="normal")
     db_entry.insert(0, str(DB_PATH))
+    db_entry.config(state="readonly")
+
+    # Environment action buttons
+    env_buttons_frame = ttk.Frame(env_frame)
+    env_buttons_frame.pack(fill=X, pady=5)
+
+    def save_environment():
+        """Save API key to .env file"""
+        api_key = api_key_var.get().strip()
+        if not api_key:
+            messagebox.showwarning("Empty API Key", "Please enter an API key before saving.")
+            return
+        
+        try:
+            env_path = Path(".env")
+            env_content = ""
+            
+            # Read existing .env file if it exists
+            if env_path.exists():
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                
+                # Update existing OPENAI_API_KEY or add it
+                updated = False
+                for i, line in enumerate(lines):
+                    if line.strip().startswith("OPENAI_API_KEY"):
+                        lines[i] = f"OPENAI_API_KEY={api_key}\n"
+                        updated = True
+                        break
+                
+                env_content = "".join(lines)
+                if not updated:
+                    env_content += f"\nOPENAI_API_KEY={api_key}\n"
+            else:
+                env_content = f"OPENAI_API_KEY={api_key}\n"
+            
+            # Write to .env file
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(env_content)
+            
+            messagebox.showinfo("Environment Saved", "API key successfully saved to .env file!")
+            
+            if global_log_area:
+                global_log_area.insert(END, "💾 Environment settings saved to .env file\n")
+                global_log_area.see(END)
+                
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Failed to save environment settings:\n{e}")
+
+    def load_environment():
+        """Load API key from .env file"""
+        try:
+            env_path = Path(".env")
+            if not env_path.exists():
+                messagebox.showinfo("No .env File", "No .env file found. Please save settings first.")
+                return
+            
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("OPENAI_API_KEY="):
+                        api_key = line.split("=", 1)[1]
+                        api_key_var.set(api_key)
+                        messagebox.showinfo("Environment Loaded", "API key successfully loaded from .env file!")
+                        
+                        if global_log_area:
+                            global_log_area.insert(END, "📂 Environment settings loaded from .env file\n")
+                            global_log_area.see(END)
+                        return
+            
+            messagebox.showwarning("API Key Not Found", "OPENAI_API_KEY not found in .env file.")
+            
+        except Exception as e:
+            messagebox.showerror("Load Error", f"Failed to load environment settings:\n{e}")
+
+    # Save and Load buttons
+    ttk.Button(
+        env_buttons_frame, 
+        text="💾 Save", 
+        bootstyle=SUCCESS, 
+        width=8,
+        command=save_environment
+    ).pack(side=LEFT, padx=2)
+
+    ttk.Button(
+        env_buttons_frame, 
+        text="📂 Load", 
+        bootstyle=INFO, 
+        width=8,
+        command=load_environment
+    ).pack(side=LEFT, padx=2)
+
+    # Auto-load on startup
+    load_environment()
 
     # Center: Appearance
     appearance_frame = ttk.LabelFrame(settings_container, text="🎨 Appearance", padding=8)
@@ -787,7 +885,7 @@ def build_gui():
     header_frame.pack(fill=X, pady=5)
     ttk.Label(
         header_frame, 
-        text="🗂️ Desktop File Organizer v2.0 - Compact Layout", 
+        text="🗂️ Tidy Desk v2.0 - Declutter Your Desktop, Reclaim Your Focus.", 
         font=("Segoe UI", 16, "bold")
     ).pack()
 
@@ -800,7 +898,7 @@ def build_gui():
 
     status_label = ttk.Label(
         status_frame, 
-        text="✨ Ready - All features accessible in compact horizontal layout", 
+        text="✨ All Set – Sleek. Smart. Sorted.",
         font=("Segoe UI", 8)
     )
     status_label.pack()
