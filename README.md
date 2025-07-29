@@ -3,7 +3,8 @@
 
 **TidyDesk** is an intelligent desktop cleanup tool that uses AI to automatically tag and organize your cluttered files and folders. With an intuitive GUI, powerful backend features, live monitoring capabilities, advanced search functionality, and comprehensive file management tools, it keeps your digital workspace clean and productive.
 
-![TidyDesk Screenshot](https://i.ibb.co/BHp8x37/tidydesk-screenshot.png)
+![TidyDesk Screenshot](https://i.ibb.co/BHp8x37w/tidydesk.png)
+
 
 ---
 
