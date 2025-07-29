@@ -117,8 +117,8 @@ def open_search_window():
     type_frame.pack(fill="x", pady=5)
     ttk.Label(type_frame, text="File Type:", width=15).pack(side="left")
     
-    # Get available file types
-    file_types = [""] + searcher.get_all_file_types()
+    # Get available file types from both tables
+    file_types = [""] + searcher.get_all_file_types(include_file_index=True)
     file_type_combo = ttk.Combobox(
         type_frame, 
         textvariable=file_type_var, 
@@ -367,6 +367,7 @@ def open_search_window():
         
         context_menu = tk.Menu(search_window, tearoff=0)
         context_menu.add_command(label="📁 Open File Location", command=lambda: open_file_location(event))
+        context_menu.add_command(label="👁️ Preview File", command=preview_selected_file)
         context_menu.add_command(label="📋 Copy Path", command=copy_file_path)
         context_menu.add_command(label="🏷️ Copy Tags", command=copy_file_tags)
         context_menu.add_separator()
@@ -394,6 +395,22 @@ def open_search_window():
             search_window.clipboard_clear()
             search_window.clipboard_append(tags)
             update_status("Tags copied to clipboard")
+    
+    def preview_selected_file():
+        """Preview the selected file from search results"""
+        selection = results_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a file to preview.")
+            return
+        
+        item = results_tree.item(selection[0])
+        file_path = item['values'][4]  # Path column
+        
+        if file_path and Path(file_path).exists():
+            from src.file_preview import show_file_preview
+            show_file_preview(search_window, file_path)
+        else:
+            messagebox.showwarning("File Not Found", f"File no longer exists at:\n{file_path}")
     
     def show_file_details():
         selection = results_tree.selection()
@@ -455,7 +472,7 @@ Last Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%
     # === MAIN SEARCH FUNCTIONS ===
     
     def display_results(results):
-        """Display search results in the tree view"""
+        """Display search results in the tree view (for organized files only)"""
         nonlocal current_results
         current_results = results
         
@@ -469,7 +486,7 @@ Last Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%
             path_display = str(result.new_path)[:40] + "..." if len(str(result.new_path)) > 40 else str(result.new_path)
             
             results_tree.insert("", "end", values=(
-                result.original_name,
+                f"📁 {result.original_name}",
                 result.file_type,
                 tags_display,
                 result.moved_at_display,
@@ -478,6 +495,53 @@ Last Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%
         
         # Update results info
         results_info_var.set(f"Found {len(results)} file(s)")
+        
+        # Switch to results tab
+        notebook.select(2)
+    
+    def display_combined_results(combined_results):
+        """Display search results from both organized and indexed tables"""
+        nonlocal current_results
+        
+        organized_results = combined_results.get('organized', [])
+        indexed_results = combined_results.get('indexed', [])
+        
+        # Store all results for context menu and export
+        current_results = organized_results + indexed_results
+        
+        # Clear existing results
+        for item in results_tree.get_children():
+            results_tree.delete(item)
+        
+        # Add organized files first
+        for result in organized_results:
+            tags_display = result.tags[:50] + "..." if len(result.tags) > 50 else result.tags
+            path_display = str(result.new_path)[:40] + "..." if len(str(result.new_path)) > 40 else str(result.new_path)
+            
+            results_tree.insert("", "end", values=(
+                f"📁 {result.original_name}",
+                result.file_type,
+                tags_display,
+                result.moved_at_display,
+                result.new_path
+            ))
+        
+        # Add indexed files
+        for result in indexed_results:
+            path_display = str(result.file_path)[:40] + "..." if len(str(result.file_path)) > 40 else str(result.file_path)
+            size_display = f"{result.file_size / 1024:.1f} KB" if result.file_size > 0 else "Unknown"
+            
+            results_tree.insert("", "end", values=(
+                f"🗃️ {result.file_name}",
+                result.file_type,
+                size_display,  # Use size instead of tags for indexed files
+                result.modified_at_display,
+                result.file_path
+            ))
+        
+        # Update results info
+        total_found = len(organized_results) + len(indexed_results)
+        results_info_var.set(f"Found {total_found} file(s) - {len(organized_results)} organized, {len(indexed_results)} indexed")
         
         # Switch to results tab
         notebook.select(2)
@@ -510,14 +574,17 @@ Last Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%
                     messagebox.showerror("Invalid Date", "Please use YYYY-MM-DD format for dates.")
                     return
             
-            # Perform search
+            # Perform search on both tables
             if use_regex and (name_pattern or tags_pattern):
-                results = searcher.search_by_regex(
+                # Regex search only works on organized files
+                organized_results = searcher.search_by_regex(
                     name_regex=name_pattern,
                     tags_regex=tags_pattern
                 )
+                indexed_results = []
             else:
-                results = searcher.search_files(
+                # Search both organized files and file index
+                organized_results = searcher.search_files(
                     name_pattern=name_pattern,
                     tags_pattern=tags_pattern,
                     file_type=file_type,
@@ -527,9 +594,28 @@ Last Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%
                     case_sensitive=case_sensitive,
                     limit=1000
                 )
+                
+                # Also search the file index
+                indexed_results = searcher.search_file_index(
+                    name_pattern=name_pattern,
+                    file_type=file_type,
+                    date_from=date_from,
+                    date_to=date_to,
+                    exact_match=exact_match,
+                    case_sensitive=case_sensitive,
+                    limit=1000
+                )
             
-            display_results(results)
-            update_status(f"Search completed - {len(results)} files found")
+            # Combine results for display
+            combined_results = {
+                'organized': organized_results,
+                'indexed': indexed_results
+            }
+            
+            display_combined_results(combined_results)
+            
+            total_found = len(organized_results) + len(indexed_results)
+            update_status(f"Search completed - {total_found} files found ({len(organized_results)} organized, {len(indexed_results)} indexed)")
             
         except Exception as e:
             messagebox.showerror("Search Error", f"An error occurred during search:\n{e}")
@@ -596,31 +682,49 @@ Last Modified: {datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%
         
         stats_window = ttk.Toplevel(search_window)
         stats_window.title("📊 Database Statistics")
-        stats_window.geometry("400x300")
+        stats_window.geometry("500x400")
         stats_window.transient(search_window)
         
         stats_text = ScrolledText(stats_window, font=("Consolas", 10))
         stats_text.pack(fill="both", expand=True, padx=20, pady=20)
         
+        # Extract organized files stats
+        org_stats = stats.get('organized_files', {})
+        idx_stats = stats.get('indexed_files', {})
+        
         stats_info = f"""
 DATABASE STATISTICS
-{'=' * 40}
+{'=' * 50}
 
-Total Files: {stats['total_files']}
-Tagged Files: {stats['tagged_files']}
-Untagged Files: {stats['untagged_files']}
+ORGANIZED FILES (TidyDesk Database)
+{'=' * 50}
+Total Files: {org_stats.get('total_files', 0)}
+Tagged Files: {org_stats.get('tagged_files', 0)}
+Untagged Files: {org_stats.get('untagged_files', 0)}
 
-Tag Coverage: {(stats['tagged_files']/stats['total_files']*100) if stats['total_files'] > 0 else 0:.1f}%
+Tag Coverage: {(org_stats.get('tagged_files', 0)/org_stats.get('total_files', 1)*100) if org_stats.get('total_files', 0) > 0 else 0:.1f}%
 
-TOP FILE TYPES
-{'=' * 40}
+INDEXED FILES (System Index)
+{'=' * 50}
+Total Files: {idx_stats.get('total_files', 0):,}
+Accessible: {idx_stats.get('accessible_files', 0):,}
+Inaccessible: {idx_stats.get('inaccessible_files', 0):,}
+Total Size: {idx_stats.get('total_size_bytes', 0) / (1024**3):.2f} GB
+
+TOP ORGANIZED FILE TYPES
+{'=' * 50}
 """
         
-        for file_type, count in stats['top_file_types']:
+        for file_type, count in org_stats.get('top_file_types', []):
             stats_info += f"{file_type:<15} {count:>6} files\n"
         
-        if stats['date_range'][0] and stats['date_range'][1]:
-            stats_info += f"\nDate Range: {stats['date_range'][0]} to {stats['date_range'][1]}"
+        stats_info += f"\nTOP INDEXED FILE TYPES\n{'=' * 50}\n"
+        for file_type, count in idx_stats.get('top_file_types', []):
+            stats_info += f"{file_type:<15} {count:>6} files\n"
+        
+        org_date_range = org_stats.get('date_range', (None, None))
+        if org_date_range[0] and org_date_range[1]:
+            stats_info += f"\nOrganized Date Range: {org_date_range[0]} to {org_date_range[1]}"
         
         stats_text.insert("1.0", stats_info)
     
@@ -667,6 +771,8 @@ TOP FILE TYPES
     
     # Load initial stats to show database status
     stats = searcher.get_search_stats()
-    update_status(f"Database ready - {stats['total_files']} files indexed")
+    organized_count = stats.get('organized_files', {}).get('total_files', 0)
+    indexed_count = stats.get('indexed_files', {}).get('total_files', 0)
+    update_status(f"Database ready - {organized_count} organized files, {indexed_count} indexed files")
 
 # Usage: Replace the existing open_search_window() function in gui.py with this implementation

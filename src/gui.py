@@ -19,6 +19,10 @@ from src.ai_tagger import set_ai_enabled
 from src.search_window import open_search_window
 from src.index_files import start_indexing_threaded, get_index_statistics, clear_index
 from src.theme_manager import theme_manager
+from src.desktop_watcher import DesktopWatcher
+from src.time_machine_gui import show_time_machine_window
+from src.file_preview import show_file_preview, preview_file_dialog
+import multiprocessing
 
 # Enhanced History Management
 HISTORY_LOG_PATH = Path("history_log.json")
@@ -120,6 +124,8 @@ history_manager = UndoHistoryManager()
 # Global variables for sharing between tabs
 global_log_area = None
 global_meter = None
+global_desktop_watcher = None
+global_status_label = None
 
 def retag_missing_entries_threaded(log_callback, meter):
     """Threaded version of retag_missing_entries"""
@@ -252,44 +258,143 @@ def create_main_content(parent):
     )
     meter.pack(fill=X, pady=5)
 
-    # Right: Quick tools
-    tools_frame = ttk.LabelFrame(top_section, text="🛠️ Tools", padding=10)
-    tools_frame.pack(side=RIGHT, fill=Y, padx=(5, 0))
+    # Right: Live monitoring and tools
+    right_section = ttk.Frame(top_section)
+    right_section.pack(side=RIGHT, fill=Y, padx=(5, 0))
+
+    # Live monitoring controls
+    monitor_frame = ttk.LabelFrame(right_section, text="👀 Live Monitor", padding=8)
+    monitor_frame.pack(fill=X, pady=(0, 5))
+
+    # Initialize desktop watcher
+    global global_desktop_watcher
+
+    def update_monitor_status(message):
+        """Update the status label for live monitoring"""
+        if global_status_label:
+            global_status_label.config(text=message)
+
+    global_desktop_watcher = DesktopWatcher(
+        log_callback=lambda msg: global_log_area.insert(END, msg + "\n") or global_log_area.see(END) if global_log_area else None,
+        status_callback=update_monitor_status
+    )
+
+    # Monitor toggle
+    monitor_var = ttk.BooleanVar(value=global_desktop_watcher.get_setting("live_monitor", False))
+
+    def toggle_monitor():
+        enabled = monitor_var.get()
+        global_desktop_watcher.update_setting("live_monitor", enabled)
+
+        if enabled:
+            global_desktop_watcher.start_monitoring()
+        else:
+            global_desktop_watcher.stop_monitoring()
+
+    ttk.Checkbutton(
+        monitor_frame,
+        text="Live Monitor",
+        variable=monitor_var,
+        command=toggle_monitor
+    ).pack(anchor="w")
+
+    # AI tagging toggle
+    ai_tag_var = ttk.BooleanVar(value=global_desktop_watcher.get_setting("auto_ai_tagging", True))
+
+    def toggle_ai_tagging():
+        enabled = ai_tag_var.get()
+        global_desktop_watcher.update_setting("auto_ai_tagging", enabled)
+
+        if global_log_area:
+            status = "enabled" if enabled else "disabled"
+            global_log_area.insert(END, f"🤖 Auto AI Tagging {status}\n")
+            global_log_area.see(END)
+
+    ttk.Checkbutton(
+        monitor_frame,
+        text="Auto AI Tagging",
+        variable=ai_tag_var,
+        command=toggle_ai_tagging
+    ).pack(anchor="w")
+
+    # Organize new files dropdown
+    organize_frame = ttk.Frame(monitor_frame)
+    organize_frame.pack(fill=X, pady=2)
+
+    ttk.Label(organize_frame, text="Organize To:", font=("Segoe UI", 8)).pack(anchor="w")
+
+    organize_options = ["Desktop Folder", "Organized Folder", "Do Not Move"]
+    organize_var = ttk.StringVar(value=global_desktop_watcher.get_setting("organize_to", "Desktop Folder"))
+
+    def on_organize_change(event=None):
+        selected = organize_var.get()
+        global_desktop_watcher.update_setting("organize_to", selected)
+
+        if global_log_area:
+            global_log_area.insert(END, f"📁 Organize new files to: {selected}\n")
+            global_log_area.see(END)
+
+    organize_combo = ttk.Combobox(
+        organize_frame,
+        textvariable=organize_var,
+        values=organize_options,
+        state="readonly",
+        width=15,
+        font=("Segoe UI", 8)
+    )
+    organize_combo.pack(fill=X)
+    organize_combo.bind('<<ComboboxSelected>>', on_organize_change)
+
+    # Quick tools
+    tools_frame = ttk.LabelFrame(right_section, text="🛠️ Tools", padding=8)
+    tools_frame.pack(fill=X)
 
     tools_btn_frame = ttk.Frame(tools_frame)
-    tools_btn_frame.pack()
+    tools_btn_frame.pack(fill=X)
+
+    # Configure grid weights for better spacing
+    tools_btn_frame.grid_columnconfigure(0, weight=1)
+    tools_btn_frame.grid_columnconfigure(1, weight=1)
 
     ttk.Button(
         tools_btn_frame, 
         text="🔍 Search", 
         bootstyle=SECONDARY,
-        width=12,
+        width=17,
         command=open_search_window
-    ).grid(row=0, column=0, padx=1, pady=1)
+    ).grid(row=0, column=0, padx=2, pady=2, sticky="ew")
 
     ttk.Button(
         tools_btn_frame, 
         text="📊 Export CSV", 
         bootstyle=SECONDARY,
-        width=12,
+        width=17,
         command=export_to_csv
-    ).grid(row=0, column=1, padx=1, pady=1)
+    ).grid(row=0, column=1, padx=2, pady=2, sticky="ew")
 
     ttk.Button(
         tools_btn_frame, 
         text="👁️ Preview", 
         bootstyle=LIGHT,
-        width=12,
+        width=17,
         command=preview_file
-    ).grid(row=1, column=0, padx=1, pady=1)
+    ).grid(row=1, column=0, padx=2, pady=2, sticky="ew")
+
+    ttk.Button(
+        tools_btn_frame, 
+        text="🕰️ Time Machine", 
+        bootstyle=INFO,
+        width=18,
+        command=lambda: show_time_machine_window(tools_btn_frame.winfo_toplevel())
+    ).grid(row=1, column=1, padx=2, pady=2, sticky="ew")
 
     ttk.Button(
         tools_btn_frame, 
         text="📊 Index Stats", 
-        bootstyle=INFO,
-        width=12,
+        bootstyle=SECONDARY,
+        width=17,
         command=show_index_stats
-    ).grid(row=1, column=1, padx=1, pady=1)
+    ).grid(row=2, column=0, columnspan=2, padx=2, pady=2, sticky="ew")
 
     # Middle section - AI and Analytics in tabs (much more compact)
     middle_section = ttk.Frame(main_container)
@@ -326,6 +431,10 @@ def create_main_content(parent):
     global global_log_area, global_meter
     global_log_area = log_area
     global_meter = meter
+
+    # Auto-start monitoring if enabled
+    if monitor_var.get():
+        global_desktop_watcher.start_monitoring()
 
     return main_container
 
@@ -537,22 +646,35 @@ def create_compact_settings_tab(parent):
     env_buttons_frame = ttk.Frame(env_frame)
     env_buttons_frame.pack(fill=X, pady=5)
 
+    # Add status label for environment feedback
+    env_status_frame = ttk.Frame(env_frame)
+    env_status_frame.pack(fill=X, pady=2)
+    env_status_label = ttk.Label(env_status_frame, text="", font=("Segoe UI", 8))
+    env_status_label.pack(side=LEFT)
+
+    def update_env_status(message, color="info"):
+        """Update environment status label"""
+        env_status_label.config(text=message)
+        if global_log_area:
+            global_log_area.insert(END, f"{message}\n")
+            global_log_area.see(END)
+
     def save_environment():
         """Save API key to .env file"""
         api_key = api_key_var.get().strip()
         if not api_key:
-            messagebox.showwarning("Empty API Key", "Please enter an API key before saving.")
+            update_env_status("⚠️ Please enter an API key before saving")
             return
-        
+
         try:
             env_path = Path(".env")
             env_content = ""
-            
+
             # Read existing .env file if it exists
             if env_path.exists():
                 with open(env_path, "r", encoding="utf-8") as f:
                     lines = f.readlines()
-                
+
                 # Update existing OPENAI_API_KEY or add it
                 updated = False
                 for i, line in enumerate(lines):
@@ -560,51 +682,43 @@ def create_compact_settings_tab(parent):
                         lines[i] = f"OPENAI_API_KEY={api_key}\n"
                         updated = True
                         break
-                
+
                 env_content = "".join(lines)
                 if not updated:
                     env_content += f"\nOPENAI_API_KEY={api_key}\n"
             else:
                 env_content = f"OPENAI_API_KEY={api_key}\n"
-            
+
             # Write to .env file
             with open(env_path, "w", encoding="utf-8") as f:
                 f.write(env_content)
-            
-            messagebox.showinfo("Environment Saved", "API key successfully saved to .env file!")
-            
-            if global_log_area:
-                global_log_area.insert(END, "💾 Environment settings saved to .env file\n")
-                global_log_area.see(END)
-                
+
+            update_env_status("✅ API key saved successfully")
+
         except Exception as e:
-            messagebox.showerror("Save Error", f"Failed to save environment settings:\n{e}")
+            update_env_status(f"❌ Failed to save: {str(e)[:50]}...")
 
     def load_environment():
         """Load API key from .env file"""
         try:
             env_path = Path(".env")
             if not env_path.exists():
-                messagebox.showinfo("No .env File", "No .env file found. Please save settings first.")
+                update_env_status("⚠️ No .env file found")
                 return
-            
+
             with open(env_path, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith("OPENAI_API_KEY="):
                         api_key = line.split("=", 1)[1]
                         api_key_var.set(api_key)
-                        messagebox.showinfo("Environment Loaded", "API key successfully loaded from .env file!")
-                        
-                        if global_log_area:
-                            global_log_area.insert(END, "📂 Environment settings loaded from .env file\n")
-                            global_log_area.see(END)
+                        update_env_status("✅ API key loaded successfully")
                         return
-            
-            messagebox.showwarning("API Key Not Found", "OPENAI_API_KEY not found in .env file.")
-            
+
+            update_env_status("⚠️ API key not found in .env file")
+
         except Exception as e:
-            messagebox.showerror("Load Error", f"Failed to load environment settings:\n{e}")
+            update_env_status(f"❌ Failed to load: {str(e)[:50]}...")
 
     # Save and Load buttons
     ttk.Button(
@@ -625,6 +739,12 @@ def create_compact_settings_tab(parent):
 
     # Auto-load on startup
     load_environment()
+    
+    # Check initial API key status
+    if api_key_var.get():
+        update_env_status("✅ API key configured")
+    else:
+        update_env_status("⚠️ No API key configured")
 
     # Center: Appearance
     appearance_frame = ttk.LabelFrame(settings_container, text="🎨 Appearance", padding=8)
@@ -634,7 +754,7 @@ def create_compact_settings_tab(parent):
     theme_frame = ttk.Frame(appearance_frame)
     theme_frame.pack(fill=X, pady=2)
     ttk.Label(theme_frame, text="Theme:", width=8).pack(side=LEFT)
-    
+
     theme_var = ttk.StringVar(value=theme_manager.current_theme)
     theme_combo = ttk.Combobox(
         theme_frame, 
@@ -644,10 +764,10 @@ def create_compact_settings_tab(parent):
         state="readonly"
     )
     theme_combo.pack(side=LEFT, padx=2)
-    
+
     # Store theme names for mapping
     theme_names = theme_manager.get_available_themes()
-    
+
     def on_theme_change(event=None):
         """Handle theme change"""
         selected_display = theme_var.get()
@@ -657,18 +777,18 @@ def create_compact_settings_tab(parent):
             if theme_manager.get_theme_display_name(theme_name) == selected_display:
                 selected_theme = theme_name
                 break
-        
+
         if selected_theme:
             # Get the root window to apply theme
             root_window = theme_frame.winfo_toplevel()
             success = theme_manager.apply_theme(selected_theme, root_window)
-            
+
             if success:
                 # Update log if available
                 if global_log_area:
                     global_log_area.insert(END, f"✨ Theme changed to: {selected_display}\n")
                     global_log_area.see(END)
-                
+
                 # Show restart notice for full effect
                 messagebox.showinfo(
                     "Theme Applied", 
@@ -676,9 +796,9 @@ def create_compact_settings_tab(parent):
                 )
             else:
                 messagebox.showerror("Theme Error", "Failed to apply theme. Please try again.")
-    
+
     theme_combo.bind('<<ComboboxSelected>>', on_theme_change)
-    
+
     # Theme preview button
     preview_btn = ttk.Button(
         theme_frame,
@@ -711,23 +831,23 @@ def show_theme_preview(theme_display_name):
         if theme_manager.get_theme_display_name(name) == theme_display_name:
             theme_name = name
             break
-    
+
     if not theme_name:
         return
-    
+
     # Create preview window
     preview_win = Toplevel()
     preview_win.title(f"Theme Preview - {theme_display_name}")
     preview_win.geometry("400x300")
     preview_win.transient()
     preview_win.grab_set()
-    
+
     # Get theme colors for preview
     colors = theme_manager.get_theme_preview_colors(theme_name)
-    
+
     # Configure preview window
     preview_win.configure(bg=colors['bg'])
-    
+
     # Header
     header_frame = ttk.Frame(preview_win)
     header_frame.pack(fill=X, padx=20, pady=10)
@@ -736,25 +856,25 @@ def show_theme_preview(theme_display_name):
         text=f"🎨 {theme_display_name}", 
         font=("Segoe UI", 14, "bold")
     ).pack()
-    
+
     # Sample content
     content_frame = ttk.LabelFrame(preview_win, text="Preview Content", padding=15)
     content_frame.pack(fill=BOTH, expand=True, padx=20, pady=10)
-    
+
     # Sample widgets
     ttk.Label(content_frame, text="Sample text with this theme").pack(pady=5)
-    
+
     button_frame = ttk.Frame(content_frame)
     button_frame.pack(pady=10)
-    
+
     ttk.Button(button_frame, text="Primary", bootstyle=PRIMARY).pack(side=LEFT, padx=5)
     ttk.Button(button_frame, text="Success", bootstyle=SUCCESS).pack(side=LEFT, padx=5)
     ttk.Button(button_frame, text="Info", bootstyle=INFO).pack(side=LEFT, padx=5)
-    
+
     # Sample progress
     progress = ttk.Progressbar(content_frame, length=200, mode='determinate', value=75)
     progress.pack(pady=10)
-    
+
     # Close button
     ttk.Button(
         preview_win, 
@@ -840,44 +960,17 @@ def export_to_csv():
         messagebox.showerror("Export Error", f"Failed to export database:\n{e}")
 
 def preview_file():
-    path = filedialog.askopenfilename(title="Select file to preview")
-    if not path:
-        return
-
-    win = Toplevel()
-    win.title(f"Preview - {Path(path).name}")
-    win.geometry("600x400")
-    win.transient()
-    win.grab_set()
-
-    # File info
-    info_frame = ttk.LabelFrame(win, text="File Information", padding=10)
-    info_frame.pack(fill=X, padx=20, pady=10)
-
-    file_path = Path(path)
-    file_info = f"""Name: {file_path.name}
-Size: {file_path.stat().st_size if file_path.exists() else 'Unknown'} bytes
-Type: {file_path.suffix}
-Location: {file_path.parent}"""
-
-    ttk.Label(info_frame, text=file_info, font=("Consolas", 9)).pack(anchor="w")
-
-    # Preview area
-    preview_frame = ttk.LabelFrame(win, text="Preview", padding=10)
-    preview_frame.pack(fill=BOTH, expand=True, padx=20, pady=10)
-
-    preview_text = ScrolledText(preview_frame, height=15, font=("Consolas", 9))
-    preview_text.pack(fill=BOTH, expand=True)
-    preview_text.insert(END, "File preview functionality will be implemented in a future update...")
-
-    ttk.Button(win, text="Close", bootstyle=PRIMARY, command=win.destroy).pack(pady=10)
+    from src.file_preview import preview_file_dialog
+    
+    # Use the new comprehensive file preview module
+    preview_file_dialog(ttk.Window())
 
 def build_gui():
     """Build the main GUI with horizontal compact layout"""
     app = ttk.Window(
         themename=theme_manager.current_theme, 
-        title="Desktop File Organizer v2.0 - Compact Edition", 
-        size=(1400, 800)  # Wider and slightly taller
+        title="TidyDesk v2.1 - Declutter Your Desktop, Reclaim Your Focus.", 
+        size=(1500, 800)  # Increased width to accommodate better layout
     )
 
     # Compact header
@@ -896,12 +989,21 @@ def build_gui():
     status_frame = ttk.Frame(app)
     status_frame.pack(fill=X, pady=2)
 
-    status_label = ttk.Label(
+    global global_status_label
+    global_status_label = ttk.Label(
         status_frame, 
         text="✨ All Set – Sleek. Smart. Sorted.",
         font=("Segoe UI", 8)
     )
-    status_label.pack()
+    global_status_label.pack()
+
+    # Cleanup function for safe shutdown
+    def on_closing():
+        if global_desktop_watcher and global_desktop_watcher.is_running:
+            global_desktop_watcher.stop_monitoring()
+        app.destroy()
+
+    app.protocol("WM_DELETE_WINDOW", on_closing)
 
     # Start the application
     app.mainloop()

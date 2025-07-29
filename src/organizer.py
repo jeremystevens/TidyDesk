@@ -15,20 +15,54 @@ with open("config.json", "r", encoding="utf-8") as f:
 
 ALLOWED_EXTENSIONS = CONFIG["ALLOWED_EXTENSIONS"]
 
-# get desktop path 
-def get_windows_desktop_path():
-    CSIDL_DESKTOP = 0  # Windows Desktop constant
-    SHGFP_TYPE_CURRENT = 0
-    buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
-    ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_DESKTOP, None, SHGFP_TYPE_CURRENT, buf)
-    return Path(buf.value)
+# get desktop path - cross-platform compatible
+def get_desktop_path():
+    """Get the desktop path for the current OS"""
+    import platform
+    system = platform.system()
+    
+    if system == "Windows":
+        try:
+            import ctypes.wintypes
+            CSIDL_DESKTOP = 0
+            SHGFP_TYPE_CURRENT = 0
+            buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+            ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_DESKTOP, None, SHGFP_TYPE_CURRENT, buf)
+            return Path(buf.value)
+        except:
+            # Fallback for Windows
+            user = os.getenv("USERNAME", "user")
+            return Path(f"C:/Users/{user}/Desktop")
+    else:
+        # Linux/macOS/other Unix-like systems
+        user = os.getenv("USER", "user")
+        home = Path.home()
+        desktop_path = home / "Desktop"
+        # Create Desktop directory if it doesn't exist
+        desktop_path.mkdir(exist_ok=True)
+        return desktop_path
+
+def get_organized_path():
+    """Get the organized files path for the current OS"""
+    import platform
+    system = platform.system()
+    user = os.getenv("USER", os.getenv("USERNAME", "user"))
+    
+    if system == "Windows":
+        return Path(f"C:/Users/{user}/Organized")
+    else:
+        # Linux/macOS - use home directory
+        home = Path.home()
+        organized_path = home / "Organized"
+        organized_path.mkdir(exist_ok=True)
+        return organized_path
 
 SKIP_TAGS = {"image", "video", "audio"}
 BATCH_SIZE = 50
 
-USER = os.getlogin()
-DESKTOP = get_windows_desktop_path()
-ORGANIZED = Path(f"C:/Users/{USER}/Organized")
+USER = os.getenv("USER", os.getenv("USERNAME", "user"))
+DESKTOP = get_desktop_path()
+ORGANIZED = get_organized_path()
 DB_PATH = Path("file_index.db")
 
 # Enhanced History Management Integration
