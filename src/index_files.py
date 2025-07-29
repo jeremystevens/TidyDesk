@@ -5,6 +5,9 @@ import time
 from pathlib import Path
 from datetime import datetime
 import platform
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue
+import multiprocessing
 
 # Import database functions
 from src.db import DB_PATH
@@ -45,7 +48,7 @@ SKIP_EXTENSIONS = {
 }
 
 class FileIndexer:
-    def __init__(self, log_callback=None, meter=None):
+    def __init__(self, log_callback=None, meter=None, max_workers=None):
         self.log_callback = log_callback or (lambda x: print(x))
         self.meter = meter
         self.is_running = False
@@ -53,6 +56,12 @@ class FileIndexer:
         self.processed_files = 0
         self.indexed_files = 0
         self.skipped_files = 0
+        
+        # Threading setup
+        self.max_workers = max_workers or min(32, (multiprocessing.cpu_count() or 1) + 4)
+        self.file_queue = Queue()
+        self.batch_size = 1000  # Process files in batches for better performance
+        self.lock = threading.Lock()
         
         # Get OS-specific skip folders
         system = platform.system()
@@ -65,6 +74,7 @@ class FileIndexer:
         
         self.log_callback(f"🖥️ Detected OS: {system}")
         self.log_callback(f"🚫 Will skip {len(self.skip_folders)} system folder types")
+        self.log_callback(f"⚡ Using {self.max_workers} worker threads for parallel processing")
 
     def init_index_db(self):
         """Initialize the file index database table"""
@@ -126,84 +136,115 @@ class FileIndexer:
         
         return False
 
-    def count_total_files(self, start_paths):
-        """Count total files to process for progress tracking"""
-        self.log_callback("📊 Counting files for progress tracking...")
-        total = 0
+    
+
+    def index_file_batch(self, file_paths):
+        """Index a batch of files into the database for better performance"""
+        indexed_count = 0
+        skipped_count = 0
+        batch_data = []
+        inaccessible_data = []
+        
+        for file_path in file_paths:
+            if not self.is_running:
+                break
+                
+            try:
+                file_path = Path(file_path)
+                
+                # Get file stats
+                stat = file_path.stat()
+                file_size = stat.st_size
+                created_at = datetime.fromtimestamp(stat.st_ctime).isoformat()
+                modified_at = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                indexed_at = datetime.now().isoformat()
+                
+                # Determine file type
+                file_type = file_path.suffix.lower() if file_path.suffix else 'no_extension'
+                
+                batch_data.append((
+                    str(file_path), file_path.name, file_size, file_type,
+                    str(file_path.parent), created_at, modified_at, indexed_at, 1
+                ))
+                indexed_count += 1
+                
+            except (PermissionError, FileNotFoundError, OSError):
+                inaccessible_data.append((
+                    str(file_path), Path(file_path).name, 0, datetime.now().isoformat()
+                ))
+                skipped_count += 1
+        
+        # Batch insert into database
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                c = conn.cursor()
+                
+                # Insert accessible files
+                if batch_data:
+                    c.executemany('''INSERT OR REPLACE INTO file_index 
+                                   (file_path, file_name, file_size, file_type, parent_directory, 
+                                    created_at, modified_at, indexed_at, is_accessible)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', batch_data)
+                
+                # Insert inaccessible files
+                if inaccessible_data:
+                    c.executemany('''INSERT OR REPLACE INTO file_index 
+                                   (file_path, file_name, is_accessible, indexed_at)
+                                   VALUES (?, ?, ?, ?)''', inaccessible_data)
+                
+                conn.commit()
+        except Exception as e:
+            self.log_callback(f"❌ Database error in batch: {e}")
+        
+        # Update counters thread-safely
+        with self.lock:
+            self.indexed_files += indexed_count
+            self.skipped_files += skipped_count
+            self.processed_files += len(file_paths)
+        
+        return indexed_count, skipped_count
+
+    def collect_all_files(self, start_paths):
+        """Collect all file paths that need to be indexed"""
+        all_files = []
+        
+        self.log_callback("📊 Scanning filesystem for indexable files...")
         
         for start_path in start_paths:
+            if not self.is_running:
+                break
+                
             try:
                 for root, dirs, files in os.walk(start_path):
+                    if not self.is_running:
+                        break
+                    
                     # Skip entire directories if they should be skipped
                     if self.should_skip_folder(root):
-                        dirs.clear()  # Don't recurse into subdirectories
+                        dirs.clear()
                         continue
                     
-                    # Remove skip directories from dirs list to avoid walking into them
+                    # Remove skip directories from dirs list
                     dirs[:] = [d for d in dirs if not self.should_skip_folder(os.path.join(root, d))]
                     
-                    # Count files that won't be skipped
+                    # Collect files that won't be skipped
                     for file in files:
+                        if not self.is_running:
+                            break
+                            
                         file_path = os.path.join(root, file)
                         if not self.should_skip_file(file_path):
-                            total += 1
+                            all_files.append(file_path)
+                            
+                            # Log progress every 10000 files
+                            if len(all_files) % 10000 == 0:
+                                self.log_callback(f"📊 Found {len(all_files)} files so far...")
                     
-                    # Update progress every 1000 files counted
-                    if total % 1000 == 0:
-                        self.log_callback(f"📊 Counted {total} files so far...")
-                        
             except (PermissionError, FileNotFoundError) as e:
                 self.log_callback(f"⚠️ Cannot access {start_path}: {e}")
                 continue
         
-        self.total_files = total
-        self.log_callback(f"📊 Total files to index: {total}")
-        return total
-
-    def index_file(self, file_path):
-        """Index a single file into the database"""
-        try:
-            file_path = Path(file_path)
-            
-            # Get file stats
-            stat = file_path.stat()
-            file_size = stat.st_size
-            created_at = datetime.fromtimestamp(stat.st_ctime).isoformat()
-            modified_at = datetime.fromtimestamp(stat.st_mtime).isoformat()
-            indexed_at = datetime.now().isoformat()
-            
-            # Determine file type
-            file_type = file_path.suffix.lower() if file_path.suffix else 'no_extension'
-            
-            # Insert into database
-            with sqlite3.connect(DB_PATH) as conn:
-                c = conn.cursor()
-                c.execute('''INSERT OR REPLACE INTO file_index 
-                           (file_path, file_name, file_size, file_type, parent_directory, 
-                            created_at, modified_at, indexed_at, is_accessible)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                         (str(file_path), file_path.name, file_size, file_type,
-                          str(file_path.parent), created_at, modified_at, indexed_at, 1))
-                conn.commit()
-            
-            self.indexed_files += 1
-            return True
-            
-        except (PermissionError, FileNotFoundError, OSError) as e:
-            # Log inaccessible files but don't stop processing
-            try:
-                with sqlite3.connect(DB_PATH) as conn:
-                    c = conn.cursor()
-                    c.execute('''INSERT OR REPLACE INTO file_index 
-                               (file_path, file_name, is_accessible, indexed_at)
-                               VALUES (?, ?, ?, ?)''',
-                             (str(file_path), Path(file_path).name, 0, datetime.now().isoformat()))
-                    conn.commit()
-            except:
-                pass  # If we can't even log it, just skip
-            
-            self.skipped_files += 1
-            return False
+        return all_files
 
     def update_progress(self):
         """Update the progress meter and log"""
@@ -217,7 +258,7 @@ class FileIndexer:
                             f"({self.indexed_files} indexed, {self.skipped_files} skipped)")
 
     def index_files(self, start_paths=None):
-        """Main indexing function"""
+        """Main indexing function with multi-threading support"""
         if self.is_running:
             self.log_callback("⚠️ Indexing is already running!")
             return
@@ -240,68 +281,70 @@ class FileIndexer:
                 else:  # Linux
                     start_paths = ["/home", "/opt", "/usr/local"]
             
-            self.log_callback(f"🚀 Starting file indexing from: {', '.join(start_paths)}")
-            
-            # Count total files first
-            self.count_total_files(start_paths)
+            self.log_callback(f"🚀 Starting parallel file indexing from: {', '.join(start_paths)}")
+            self.log_callback(f"⚡ Using {self.max_workers} worker threads")
             
             # Initialize progress
             self.processed_files = 0
             self.indexed_files = 0
             self.skipped_files = 0
             
-            if self.meter:
-                self.meter.configure(amountused=0, amounttotal=self.total_files)
-            
-            # Start indexing
             start_time = time.time()
             
-            for start_path in start_paths:
-                if not self.is_running:  # Check if cancelled
-                    break
-                    
-                self.log_callback(f"📁 Indexing path: {start_path}")
+            # Step 1: Collect all files first
+            self.log_callback("🔍 Phase 1: Collecting file paths...")
+            all_files = self.collect_all_files(start_paths)
+            
+            if not all_files:
+                self.log_callback("⚠️ No files found to index!")
+                return
+            
+            self.total_files = len(all_files)
+            self.log_callback(f"📊 Found {self.total_files:,} files to index")
+            
+            # Initialize progress meter
+            if self.meter:
+                self.meter.configure(amounttotal=self.total_files, amountused=0)
+            
+            # Step 2: Process files in batches using thread pool
+            self.log_callback("⚡ Phase 2: Multi-threaded indexing...")
+            
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Create batches
+                batches = []
+                for i in range(0, len(all_files), self.batch_size):
+                    batch = all_files[i:i + self.batch_size]
+                    batches.append(batch)
                 
-                try:
-                    for root, dirs, files in os.walk(start_path):
-                        if not self.is_running:  # Check if cancelled
-                            break
+                self.log_callback(f"📦 Created {len(batches)} batches of ~{self.batch_size} files each")
+                
+                # Submit all batches to thread pool
+                futures = {executor.submit(self.index_file_batch, batch): batch for batch in batches}
+                
+                completed_batches = 0
+                
+                # Process completed futures
+                for future in as_completed(futures):
+                    if not self.is_running:
+                        break
                         
-                        # Skip entire directories if they should be skipped
-                        if self.should_skip_folder(root):
-                            self.log_callback(f"⏭️ Skipping system folder: {root}")
-                            dirs.clear()  # Don't recurse into subdirectories
-                            continue
+                    try:
+                        indexed_count, skipped_count = future.result()
+                        completed_batches += 1
                         
-                        # Remove skip directories from dirs list
-                        original_dirs = dirs[:]
-                        dirs[:] = [d for d in dirs if not self.should_skip_folder(os.path.join(root, d))]
-                        skipped_dirs = set(original_dirs) - set(dirs)
-                        for skipped_dir in skipped_dirs:
-                            self.log_callback(f"⏭️ Skipping: {os.path.join(root, skipped_dir)}")
+                        # Update progress
+                        self.update_progress()
                         
-                        # Process files in current directory
-                        for file in files:
-                            if not self.is_running:  # Check if cancelled
-                                break
-                                
-                            file_path = os.path.join(root, file)
+                        # Log progress every 10 batches or every 10%
+                        progress_percent = (self.processed_files / self.total_files) * 100
+                        if completed_batches % 10 == 0 or completed_batches % max(1, len(batches) // 10) == 0:
+                            self.log_callback(f"📈 Progress: {self.processed_files:,}/{self.total_files:,} files "
+                                            f"({progress_percent:.1f}%) - {self.indexed_files:,} indexed, "
+                                            f"{self.skipped_files:,} skipped")
                             
-                            if self.should_skip_file(file_path):
-                                self.skipped_files += 1
-                            else:
-                                self.index_file(file_path)
-                            
-                            self.processed_files += 1
-                            self.update_progress()
-                            
-                            # Brief pause every 50 files to keep UI responsive
-                            if self.processed_files % 50 == 0:
-                                time.sleep(0.01)
-                                
-                except (PermissionError, FileNotFoundError) as e:
-                    self.log_callback(f"⚠️ Cannot access {start_path}: {e}")
-                    continue
+                    except Exception as e:
+                        self.log_callback(f"❌ Error processing batch: {e}")
+                        completed_batches += 1
             
             # Final statistics
             end_time = time.time()
@@ -309,12 +352,14 @@ class FileIndexer:
             
             if self.is_running:  # Only show completion if not cancelled
                 self.log_callback("=" * 50)
-                self.log_callback("✅ File indexing completed!")
-                self.log_callback(f"📊 Total files processed: {self.processed_files}")
-                self.log_callback(f"📊 Files successfully indexed: {self.indexed_files}")
-                self.log_callback(f"📊 Files skipped/inaccessible: {self.skipped_files}")
+                self.log_callback("✅ Multi-threaded file indexing completed!")
+                self.log_callback(f"📊 Total files processed: {self.processed_files:,}")
+                self.log_callback(f"📊 Files successfully indexed: {self.indexed_files:,}")
+                self.log_callback(f"📊 Files skipped/inaccessible: {self.skipped_files:,}")
                 self.log_callback(f"⏱️ Time taken: {duration:.2f} seconds")
-                self.log_callback(f"🚀 Average speed: {self.processed_files/duration:.0f} files/second")
+                if duration > 0:
+                    self.log_callback(f"🚀 Average speed: {self.processed_files/duration:.0f} files/second")
+                self.log_callback(f"⚡ Performance boost from {self.max_workers} threads")
                 
                 if self.meter:
                     self.meter.configure(amountused=self.total_files, amounttotal=self.total_files)
@@ -323,6 +368,8 @@ class FileIndexer:
                 
         except Exception as e:
             self.log_callback(f"❌ Error during indexing: {e}")
+            import traceback
+            self.log_callback(f"❌ Traceback: {traceback.format_exc()}")
             
         finally:
             self.is_running = False
@@ -332,10 +379,10 @@ class FileIndexer:
         self.is_running = False
         self.log_callback("🛑 Indexing cancellation requested...")
 
-def start_indexing_threaded(log_callback, meter, start_paths=None):
-    """Start file indexing in a separate thread"""
+def start_indexing_threaded(log_callback, meter, start_paths=None, max_workers=None):
+    """Start file indexing in a separate thread with optional worker count"""
     def indexing_thread():
-        indexer = FileIndexer(log_callback, meter)
+        indexer = FileIndexer(log_callback, meter, max_workers)
         indexer.index_files(start_paths)
     
     thread = threading.Thread(target=indexing_thread, daemon=True)

@@ -3,3 +3,4 @@ openai
 pillow
 python-dotenv
 ttkbootstrap
+watchdog

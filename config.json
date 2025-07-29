@@ -91,5 +91,10 @@
             ".fbx",
             ".stl"
         ]
+    },
+    "watcher_settings": {
+        "live_monitor": false,
+        "auto_ai_tagging": false,
+        "organize_to": "Desktop Folder"
     }
 }
